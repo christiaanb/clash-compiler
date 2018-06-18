@@ -346,7 +346,7 @@ mkFunInput resId e = do
       let ass = Assignment (pack "~RESULT") (Identifier templ'' Nothing)
       return ((Right ("",[ass]),Wire,libs,imps,inc,bbCtx),dcls)
     Right (decl,wr) ->
-      return ((Right decl,wr,[],[],Nothing,bbCtx),dcls)
+      return ((Right decl,wr,[],[],[],bbCtx),dcls)
   where
     go n (Lam b) = do
       (id_,e') <- unbind b

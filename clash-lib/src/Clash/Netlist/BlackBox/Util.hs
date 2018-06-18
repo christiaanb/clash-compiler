@@ -200,9 +200,12 @@ renderBlackBox
   -> BlackBoxContext
   -> State backend (Int -> Doc)
 renderBlackBox libs imps includes bs bbCtx = do
+  let nms' = zipWith (\_ i -> "~INCLUDENAME[" <> Text.pack (show i) <> "]")
+                     includes
+                     [(0 :: Int)]
   nms <-
-    forM includes $ \((nm,ext),inc) -> do
-      incForHash <- renderTemplate (bbCtx {bbQsysIncName = ["~INCLUDENAME"]}) inc
+    forM includes $ \((nm,_),inc) -> do
+      incForHash <- renderTemplate (bbCtx {bbQsysIncName = nms'}) inc
       iw <- iwWidth
       let incHash = hash (incForHash 0)
           nm'     = Text.concat
@@ -482,8 +485,8 @@ renderTag b (FilePath e)    = case e of
       _ -> error $ $(curLoc) ++ "argument of ~FILEPATH:" ++ show e2 ++  "does not reduce to a string"
   _ -> do e' <- getMon (prettyElem e)
           error $ $(curLoc) ++ "~FILEPATH expects a ~LIT[N] argument, but got: " ++ show e'
-renderTag b IncludeName = case bbQsysIncName b of
-  Just nm -> return nm -- TODO: fix to list of include names
+renderTag b (IncludeName n) = case indexMaybe (bbQsysIncName b) n of
+  Just nm -> return nm
   _ -> error $ $(curLoc) ++ "~INCLUDENAME used where no 'qysInclude' was specified in the primitive definition"
 renderTag b (OutputWireReg n) = case IntMap.lookup n (bbFunctions b) of
   Just (_,rw,_,_,_,_) -> case rw of {N.Wire -> return "wire"; N.Reg -> return "reg"}
@@ -537,7 +540,7 @@ prettyElem (TypElem e) = do
   e' <- prettyElem e
   renderOneLine <$> (string "~TYPEL" <> brackets (string e'))
 prettyElem CompName = return "~COMPNAME"
-prettyElem IncludeName = return "~INCLUDENAME"
+prettyElem (IncludeName i) = renderOneLine <$> ("~INCLUDENAME" <> brackets (int i))
 prettyElem (IndexType e) = do
   e' <- prettyElem e
   renderOneLine <$> (string "~INDEXTYPE" <> brackets (string e'))
