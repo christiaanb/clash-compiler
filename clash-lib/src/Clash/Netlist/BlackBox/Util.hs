@@ -19,6 +19,7 @@ module Clash.Netlist.BlackBox.Util where
 
 import           Control.Exception                    (throw)
 import           Control.Lens                         (_1,_2,(%=),use)
+import           Control.Monad                        (forM)
 import           Control.Monad.State                  (State, StateT (..), lift)
 import           Data.Bool                            (bool)
 import           Data.Foldable                        (foldrM)
@@ -194,34 +195,31 @@ renderBlackBox
   :: Backend backend
   => [BlackBoxTemplate]
   -> [BlackBoxTemplate]
-  -> Maybe ((Data.Text.Text,Data.Text.Text), BlackBoxTemplate)
+  -> [((Data.Text.Text,Data.Text.Text), BlackBoxTemplate)]
   -> BlackBoxTemplate
   -> BlackBoxContext
   -> State backend (Int -> Doc)
-renderBlackBox libs imps Nothing bs bbCtx = do
-  libs' <- mapM (fmap ($ 0) . renderTemplate bbCtx) libs
-  imps' <- mapM (fmap ($ 0) . renderTemplate bbCtx) imps
-  addLibraries libs'
-  addImports imps'
-  t <- renderTemplate bbCtx bs
-  return (\col -> PP.nest (col-2) (PP.pretty (t (col+2))))
+renderBlackBox libs imps includes bs bbCtx = do
+  nms <-
+    forM includes $ \((nm,ext),inc) -> do
+      incForHash <- renderTemplate (bbCtx {bbQsysIncName = ["~INCLUDENAME"]}) inc
+      iw <- iwWidth
+      let incHash = hash (incForHash 0)
+          nm'     = Text.concat
+                      [ Text.fromStrict nm
+                      , Text.pack (printf ("%0" ++ show (iw `div` 4) ++ "X") incHash)
+                      ]
+      pure nm'
 
-renderBlackBox libs imps (Just ((nm,ext),inc)) bs bbCtx = do
-  incForHash <- renderTemplate (bbCtx {bbQsysIncName = Just "~INCLUDENAME"}) inc
-  iw <- iwWidth
-  let incHash = hash (incForHash 0)
-      nm'     = Text.concat
-                  [ Text.fromStrict nm
-                  , Text.pack (printf ("%0" ++ show (iw `div` 4) ++ "X") incHash)
-                  ]
-      bbNamedCtx = bbCtx {bbQsysIncName = Just nm'}
-
-  inc' <-renderTemplate bbNamedCtx inc
+  let bbNamedCtx = bbCtx {bbQsysIncName = nms}
+      incs = snd <$> includes
   t <- renderTemplate bbNamedCtx bs
-  inc'' <- pretty (inc' 0)
-  addInclude (Text.unpack nm' <.> Data.Text.unpack ext, inc'')
+  incs' <- fmap pretty
+          . mapM (fmap ($ 0) . renderTemplate bbNamedCtx)
+          $ incs
   libs' <- mapM (fmap ($ 0) . renderTemplate bbNamedCtx) libs
   imps' <- mapM (fmap ($ 0) . renderTemplate bbNamedCtx) imps
+  addIncludes $ zipWith3 (\nm' ((_, ext), _) inc -> (Text.unpack nm' <.> Data.Text.unpack ext, inc)) nms includes incs'
   addLibraries libs'
   addImports imps'
   return (\col -> PP.nest (col-2) (PP.pretty (t (col+2))))
@@ -260,8 +258,7 @@ renderElem :: Backend backend
 renderElem b (D (Decl n (l:ls))) = do
   (o,oTy,_) <- idToExpr <$> combineM (lineToIdentifier b) (return . lineToType b) l
   is <- mapM (fmap idToExpr . combineM (lineToIdentifier b) (return . lineToType b)) ls
-  -- let Just (templ,libs,imps,incM,pCtx)
-  let Just (templ,_,libs,imps,incM,pCtx)  = IntMap.lookup n (bbFunctions b)
+  let Just (templ,_,libs,imps,inc,pCtx)  = IntMap.lookup n (bbFunctions b)
       b' = pCtx { bbResult = (o,oTy), bbInputs = bbInputs pCtx ++ is }
   templ' <- case templ of
               Left t        -> return t
@@ -270,7 +267,7 @@ renderElem b (D (Decl n (l:ls))) = do
   let t2 = setSimpleVar b' templ'
   if verifyBlackBoxContext b' t2
     then do
-      bb <- renderBlackBox libs imps incM t2 b'
+      bb <- renderBlackBox libs imps inc t2 b'
       return (renderLazy . layoutPretty (LayoutOptions (AvailablePerLine 120 0.4)) . bb)
     else do
       sp <- getSrcSpan
@@ -486,7 +483,7 @@ renderTag b (FilePath e)    = case e of
   _ -> do e' <- getMon (prettyElem e)
           error $ $(curLoc) ++ "~FILEPATH expects a ~LIT[N] argument, but got: " ++ show e'
 renderTag b IncludeName = case bbQsysIncName b of
-  Just nm -> return nm
+  Just nm -> return nm -- TODO: fix to list of include names
   _ -> error $ $(curLoc) ++ "~INCLUDENAME used where no 'qysInclude' was specified in the primitive definition"
 renderTag b (OutputWireReg n) = case IntMap.lookup n (bbFunctions b) of
   Just (_,rw,_,_,_,_) -> case rw of {N.Wire -> return "wire"; N.Reg -> return "reg"}
